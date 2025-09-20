@@ -19,6 +19,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     Print,
+    List,
     Delete {
         index: usize,
     },
@@ -66,6 +67,7 @@ pub fn handle_command(file: String, command: Commands) -> Result<(), Box<dyn std
 
     match command {
         Commands::Print => print_people(&people),
+        Commands::List => print_people(&people),
         Commands::Delete { index } => {
             delete_person(&mut people, index)?;
             Person::write_to_csv(&file, &people)?;
@@ -189,7 +191,7 @@ pub fn interactive_cli(file: String) -> Result<(), Box<dyn std::error::Error>> {
                         unsaved_changes = false;
                         println!("Saved to {}", file);
                     }
-                    "print" | "p" => print_people(&people),
+                    "print" | "p" | "list" | "l" => print_people(&people),
                     "delete" | "d" => {
                         if let Some(index) = args.first().and_then(|s| s.parse::<usize>().ok()) {
                             if delete_person(&mut people, index).is_ok() {
@@ -302,7 +304,7 @@ pub fn interactive_cli(file: String) -> Result<(), Box<dyn std::error::Error>> {
                     }
                     "help" | "h" => {
                         println!("Available commands:");
-                        println!("  print, p          - Display all people");
+                        println!("  print, p, list, l - Display all people");
                         println!("  new, n            - Add a new person");
                         println!("  edit <index>, e   - Edit person at index");
                         println!("  delete <index>, d - Delete person at index");

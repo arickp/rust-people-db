@@ -1,12 +1,10 @@
 use gtk::prelude::*;
-use gtk::{Application, ApplicationWindow, Button, Label, Orientation, Window, TreeView, ListStore, TreeViewColumn, CellRendererText, SelectionMode, Dialog, Entry, FileChooserDialog, FileChooserAction, ResponseType, Image, Box as GtkBox, Button as GtkButton, ComboBoxText, PopoverMenu, PopoverMenuBar, MenuButton};
-use gtk::gio::{ApplicationFlags, Menu, MenuItem};
-use gtk::gio::prelude::*;
+use gtk::{Application, ApplicationWindow, Label, Orientation, TreeView, ListStore, TreeViewColumn, CellRendererText, SelectionMode, Dialog, Entry, FileChooserDialog, FileChooserAction, ResponseType, Box as GtkBox, Button as GtkButton, ComboBoxText, ScrolledWindow, TextView};
+use gtk::gio::ApplicationFlags;
 use log;
 use std::cell::RefCell;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use gettextrs::gettext;
-use chrono::Datelike;
 use gtk::glib;
 use regex;
 
@@ -116,7 +114,16 @@ fn show_person_dialog(parent: &ApplicationWindow, person: Option<&Person>, on_sa
     let last_name_entry = Entry::builder().placeholder_text(&gettext("Last Name")).build();
     
     let dob_entry = Entry::builder().placeholder_text(&gettext("Date of Birth (YYYY-MM-DD)")).build();
-    let sport_entry = Entry::builder().placeholder_text(&gettext("Favorite Sport")).build();
+    let sport_combo = ComboBoxText::new();
+    let custom_sport_entry = Entry::builder().placeholder_text(&gettext("Custom Sport")).build();
+    
+    // Populate sport dropdown with all known sports
+    for sport in Sport::all_known_sports() {
+        let display_text = format!("{} {}", sport.emoji(), sport);
+        sport_combo.append_text(&display_text);
+    }
+    // Add "Other" option for custom sports
+    sport_combo.append_text(&format!("{} {}", "", gettext("Other")));
 
     // Store the original person's ID for editing
     let original_id = person.map(|p| p.id);
@@ -125,13 +132,48 @@ fn show_person_dialog(parent: &ApplicationWindow, person: Option<&Person>, on_sa
         first_name_entry.set_text(&p.first_name);
         last_name_entry.set_text(&p.last_name);
         dob_entry.set_text(&p.date_of_birth.to_string());
-        sport_entry.set_text(&p.favorite_sport.to_string());
+        
+        // Set the sport dropdown to the current sport
+        let sport_display = format!("{} {}", p.favorite_sport.emoji(), p.favorite_sport);
+        let known_sports = Sport::all_known_sports();
+        let mut found_index = None;
+        
+        for (i, sport) in known_sports.iter().enumerate() {
+            let display_text = format!("{} {}", sport.emoji(), sport);
+            if display_text == sport_display {
+                found_index = Some(i);
+                break;
+            }
+        }
+        
+        if let Some(index) = found_index {
+            sport_combo.set_active(Some(index as u32));
+        } else {
+            // If it's a custom sport, select "Other" and populate the custom entry
+            sport_combo.set_active(Some(known_sports.len() as u32));
+            if let Sport::Other(custom_name) = &p.favorite_sport {
+                custom_sport_entry.set_text(custom_name);
+            }
+        }
     }
 
     vbox.append(&first_name_entry);
     vbox.append(&last_name_entry);
     vbox.append(&dob_entry);
-    vbox.append(&sport_entry);
+    vbox.append(&sport_combo);
+    vbox.append(&custom_sport_entry);
+    
+    // Initially hide the custom sport entry
+    custom_sport_entry.set_visible(false);
+    
+    // Show/hide custom sport entry based on dropdown selection
+    let custom_sport_entry_clone = custom_sport_entry.clone();
+    sport_combo.connect_changed(move |combo| {
+        let active_index = combo.active().unwrap_or(0);
+        let total_items = Sport::all_known_sports().len() as u32 + 1; // +1 for "Other"
+        let is_other_selected = active_index == total_items - 1;
+        custom_sport_entry_clone.set_visible(is_other_selected);
+    });
     content_area.append(&vbox);
     
     dialog.connect_response(move |d, resp| {
@@ -146,6 +188,25 @@ fn show_person_dialog(parent: &ApplicationWindow, person: Option<&Person>, on_sa
                 chrono::NaiveDate::from_ymd_opt(1900,1,1).unwrap()
             };
             
+            // Get sport from dropdown or custom entry
+            let sport = if let Some(active_index) = sport_combo.active() {
+                let known_sports = Sport::all_known_sports();
+                let total_items = known_sports.len() as u32 + 1; // +1 for "Other"
+                if active_index == total_items - 1 {
+                    // "Other" is selected, use custom sport entry
+                    Sport::from_string(&custom_sport_entry.text())
+                } else {
+                    // A known sport is selected, get it from the dropdown
+                    if let Some(sport) = known_sports.get(active_index as usize) {
+                        sport.clone()
+                    } else {
+                        Sport::Other("Unknown".to_string())
+                    }
+                }
+            } else {
+                Sport::Other("Unknown".to_string())
+            };
+            
             let person = if let Some(id) = original_id {
                 // Editing: preserve the original ID
                 Person::with_id(
@@ -153,7 +214,7 @@ fn show_person_dialog(parent: &ApplicationWindow, person: Option<&Person>, on_sa
                     first_name_entry.text().to_string(),
                     last_name_entry.text().to_string(),
                     date_of_birth,
-                    Sport::from_string(&sport_entry.text()),
+                    sport,
                 )
             } else {
                 // Adding: create new person with auto-generated ID
@@ -161,7 +222,7 @@ fn show_person_dialog(parent: &ApplicationWindow, person: Option<&Person>, on_sa
                     first_name_entry.text().to_string(),
                     last_name_entry.text().to_string(),
                     date_of_birth,
-                    Sport::from_string(&sport_entry.text()),
+                    sport,
                 )
             };
             on_save(person);
@@ -205,6 +266,7 @@ fn build_ui(app: &Application) {
     let add_btn = GtkButton::builder().label(&gettext("Add")).build();
     let edit_btn = GtkButton::builder().label(&gettext("Edit")).build();
     let delete_btn = GtkButton::builder().label(&gettext("Delete")).build();
+    let print_btn = GtkButton::builder().label(&gettext("Print")).build();
     
     menu_bar.append(&open_btn);
     menu_bar.append(&save_btn);
@@ -212,6 +274,7 @@ fn build_ui(app: &Application) {
     menu_bar.append(&add_btn);
     menu_bar.append(&edit_btn);
     menu_bar.append(&delete_btn);
+    menu_bar.append(&print_btn);
 
     // Create list store with column types
     let list_store = ListStore::new(
@@ -270,11 +333,13 @@ fn build_ui(app: &Application) {
     let app_state_add = app_state.clone();
     let app_state_edit = app_state.clone();
     let app_state_delete = app_state.clone();
+    let app_state_print = app_state.clone();
     let window_open = window.clone();
     let window_save = window.clone();
     let window_add = window.clone();
     let window_edit = window.clone();
     let window_delete = window.clone();
+    let window_print = window.clone();
     
     // Connect button handlers
     open_btn.connect_clicked(glib::clone!(@weak window_open => move |_| {
@@ -383,8 +448,78 @@ fn build_ui(app: &Application) {
         }
     }));
 
+    print_btn.connect_clicked(glib::clone!(@weak window_print, @weak app_state_print => move |_| {
+        log::info!("Print button clicked");
+        show_print_dialog(&window_print, app_state_print.clone());
+    }));
+
     window.present();
 }
+
+// Helper to show print dialog
+fn show_print_dialog(parent: &ApplicationWindow, app_state: Rc<RefCell<AppState>>) {
+    let people = app_state.borrow().people.clone();
+    
+    if people.is_empty() {
+        // Show message dialog for empty list
+        let dialog = Dialog::with_buttons(
+            Some(&gettext("Print")),
+            Some(parent),
+            gtk::DialogFlags::MODAL,
+            &[(&gettext("OK"), ResponseType::Ok)],
+        );
+        let content_area = dialog.content_area();
+        let label = Label::builder().label(&gettext("No people to print")).build();
+        content_area.append(&label);
+        
+        dialog.connect_response(|d, _| d.close());
+        dialog.show();
+        return;
+    }
+    
+    // Show people list in a dialog
+    let dialog = Dialog::with_buttons(
+        Some(&gettext("People List")),
+        Some(parent),
+        gtk::DialogFlags::MODAL,
+        &[(&gettext("Close"), ResponseType::Ok)],
+    );
+    
+    let content_area = dialog.content_area();
+    
+    // Create a text view to display the people
+    let text_view = gtk::TextView::new();
+    text_view.set_editable(false);
+    text_view.set_wrap_mode(gtk::WrapMode::Word);
+    
+    // Create a scrolled window for the text view
+    let scrolled_window = gtk::ScrolledWindow::new();
+    scrolled_window.set_child(Some(&text_view));
+    scrolled_window.set_size_request(400, 300);
+    
+    // Format the people data
+    let mut text = String::new();
+    text.push_str(&format!("People Database Report\n"));
+    text.push_str(&format!("Total people: {}\n\n", people.len()));
+    
+    for person in &people {
+        text.push_str(&format!("ID: {}\n", person.id));
+        text.push_str(&format!("Name: {} {}\n", person.first_name, person.last_name));
+        text.push_str(&format!("Age: {}\n", person.get_age()));
+        text.push_str(&format!("Favorite Sport: {} {}\n", person.get_favorite_sport_emoji(), person.favorite_sport));
+        text.push_str("\n");
+    }
+    
+    // Set the text in the text view
+    let buffer = text_view.buffer();
+    buffer.set_text(&text);
+    
+    content_area.append(&scrolled_window);
+    
+    dialog.connect_response(|d, _| d.close());
+    dialog.show();
+}
+
 
 fn open_file_dialog(parent: &ApplicationWindow, app_state: Rc<RefCell<AppState>>) {
     let dialog = FileChooserDialog::builder()

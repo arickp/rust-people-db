@@ -52,6 +52,10 @@ The interactive interface guides you through adding, editing, deleting, and view
 
 ![CLI Screenshot](examples/cli.png)
 
+## Installing
+
+Run `./install.sh` in the project root to copy the executable and its resources to your `~/.local` folder. This has only been tested on Ubuntu Linux running GNOME.
+
 ## Features
 
 ### Both Interfaces
